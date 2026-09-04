@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH -J lth_multi_task
 #SBATCH --partition=gpu
-#SBATCH --account=nhuynh15
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
