@@ -29,6 +29,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=20, help="batch size")
     parser.add_argument("--k", type=int, default=10, help="top k decoded tokens to look for match")
     parser.add_argument("--exp_size", type=int, default=100, help="number of examples to sample from the dataset")
+    parser.add_argument("--prompt_template_index", type=int, default=None,
+        help="EP n_shot count to use (default 5 if not set). Ignored for IP, "
+             "which auto-selects its best-accuracy instruction template.")
 
     args = parser.parse_args()
     model_name = args.model_name
@@ -92,7 +95,7 @@ if __name__ == "__main__":
             best_index = np.argmax(acc_list).item()
             prompt_template_index = best_index
     elif prompt_type == "EP":
-        prompt_template_index = 5
+        prompt_template_index = args.prompt_template_index if args.prompt_template_index is not None else 5
     else:
         raise ValueError(f"prompt_type {prompt_type} not supported")
 
