@@ -6,7 +6,7 @@ from nnsight import LanguageModel
 from torch import Tensor
 from tqdm.auto import tqdm
 
-from instrex.utils.wrapper import ModelAccessor, get_accessor_config, get_model_specs
+from Shared_utils.wrapper import ModelAccessor, get_accessor_config, get_model_specs
 
 
 def path_patch_component_to_logits_batch(
