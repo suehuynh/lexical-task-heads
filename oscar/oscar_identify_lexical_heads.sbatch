@@ -12,7 +12,7 @@
 set -euo pipefail
 mkdir -p logs
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$SLURM_SUBMIT_DIR"
 
 module load python/3.11.11-5e66
 source "$REPO_ROOT/.venv/bin/activate"
