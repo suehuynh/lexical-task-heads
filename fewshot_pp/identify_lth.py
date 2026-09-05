@@ -114,7 +114,7 @@ if __name__ == "__main__":
     print("d_name:", args.d_name)
     print("n_shot:", args.n_shot)
 
-    model = HookedTransformer.from_pretrained(args.model_name, device=device)
+    model = HookedTransformer.from_pretrained(args.model_name, device=device, dtype=torch.bfloat16)
 
     with open(os.path.join(args.dataset_folder, f"{args.d_name}.json")) as f:
         dataset = json.load(f)
