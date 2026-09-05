@@ -20,6 +20,12 @@ cd "$REPO_ROOT/fewshot_pp"
 
 MODEL="meta-llama/Llama-3.2-1B-Instruct"
 
+echo "=== generating behavior file for $MODEL ==="
+python behavior_variance_tl.py \
+    --model_name "$MODEL" --d_name country-capital \
+    --n_shot_list 10 --save_root output
+
+echo "=== running path-patching sweep ==="
 python run_fewshot_pp.py \
     --model_name "$MODEL" --d_name country-capital --original_d_name country-capital \
     --k 20 --threshold 0.2 \
