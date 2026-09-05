@@ -19,7 +19,7 @@ source "$REPO_ROOT/.venv/bin/activate"
 cd "$REPO_ROOT/fewshot_pp"
 
 # Keep this small for now -- one small model, one task, few examples.
-MODEL="${MODEL:-meta-llama/Llama-3.2-1B-Instruct}"
+MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 TASK="${TASK:-country-capital}"
 N_SHOT="${N_SHOT:-10}"
 EXP_SIZE="${EXP_SIZE:-50}"
