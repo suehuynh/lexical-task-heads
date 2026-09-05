@@ -63,6 +63,11 @@ def path_patch_component_to_logits_batch(
         return_tensors="pt",
     )["input_ids"][:, 0]
 
+    if not remote and torch.cuda.is_available():
+        clean_tokens = clean_tokens.to("cuda")
+        corrupt_tokens = corrupt_tokens.to("cuda")
+        answer_tokens = answer_tokens.to("cuda")
+
     # Initialize accumulator for results
     all_results = torch.zeros((n_layers, n_heads + 1), device="cpu")
 
@@ -303,6 +308,11 @@ def path_patch_sender_to_logits_via_receivers_batch(
         "input_ids"
     ][:, 0]
 
+    if not remote and torch.cuda.is_available():
+        clean_tokens = clean_tokens.to("cuda")
+        corrupt_tokens = corrupt_tokens.to("cuda")
+        answer_tokens = answer_tokens.to("cuda")
+
     #  Determine Sender Range & Result Shape
     min_layer, min_head_or_mlp = find_earliest_receiver(receiver_list)
     if min_head_or_mlp >= 0:  # Earliest receiver is an Attention Head
@@ -390,8 +400,9 @@ def path_patch_sender_to_logits_via_receivers(
     with torch.no_grad():
         clean_logits_trace = model.trace(clean_tokens, trace=False, remote=remote)
         corrupt_logits_trace = model.trace(corrupt_tokens, trace=False, remote=remote)
-        clean_answer_logits = clean_logits_trace["logits"][torch.arange(batch_size), -1, answer_tokens]
-        corrupt_answer_logits = corrupt_logits_trace["logits"][torch.arange(batch_size), -1, answer_tokens]
+        batch_arange = torch.arange(batch_size, device=answer_tokens.device)
+        clean_answer_logits = clean_logits_trace["logits"][batch_arange, -1, answer_tokens]
+        corrupt_answer_logits = corrupt_logits_trace["logits"][batch_arange, -1, answer_tokens]
 
     # This is usually not happenning, keep it as a warning tho.
     baseline_diff = (clean_answer_logits - corrupt_answer_logits).mean()
@@ -594,7 +605,7 @@ def path_patch_sender_to_logits_via_receivers(
 
                     # Save the final logits
                     intervened_logits_obj = (
-                        accessor.lm_head.unwrap().output[torch.arange(batch_size), -1, answer_tokens].save()
+                        accessor.lm_head.unwrap().output[batch_arange, -1, answer_tokens].save()
                     )
             run2_success = True  # Assume success if trace completes without nnsight error
 
@@ -684,8 +695,9 @@ def path_patch_sender_to_receivers(
     with torch.no_grad():
         clean_logits_trace = model.trace(clean_tokens, trace=False, remote=remote)
         corrupt_logits_trace = model.trace(corrupt_tokens, trace=False, remote=remote)
-        clean_answer_logits = clean_logits_trace["logits"][torch.arange(batch_size), -1, answer_tokens]
-        corrupt_answer_logits = corrupt_logits_trace["logits"][torch.arange(batch_size), -1, answer_tokens]
+        batch_arange = torch.arange(batch_size, device=answer_tokens.device)
+        clean_answer_logits = clean_logits_trace["logits"][batch_arange, -1, answer_tokens]
+        corrupt_answer_logits = corrupt_logits_trace["logits"][batch_arange, -1, answer_tokens]
 
     # This is usually not happenning, keep it as a warning tho.
     baseline_diff = (clean_answer_logits - corrupt_answer_logits).mean()
@@ -886,7 +898,7 @@ def path_patch_sender_to_receivers(
 
                     # Save the final logits
                     intervened_logits_obj = (
-                        accessor.lm_head.unwrap().output[torch.arange(batch_size), -1, answer_tokens].save()
+                        accessor.lm_head.unwrap().output[batch_arange, -1, answer_tokens].save()
                     )
             run2_success = True  # Assume success if trace completes without nnsight error
 
@@ -976,6 +988,11 @@ def path_patch_sender_to_receivers_batch(
     corrupt_tokens = model.tokenizer(corrupt_prompts, padding_side="left", **tokenizer_kwargs)["input_ids"]
     answer_tokens = model.tokenizer(answers, padding_side="right", add_special_tokens=False, **tokenizer_kwargs)[
         "input_ids"][:, 0]
+
+    if not remote and torch.cuda.is_available():
+        clean_tokens = clean_tokens.to("cuda")
+        corrupt_tokens = corrupt_tokens.to("cuda")
+        answer_tokens = answer_tokens.to("cuda")
 
     #  Determine Sender Range & Result Shape
     min_layer, min_head_or_mlp = find_earliest_receiver(receiver_list)
