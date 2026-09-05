@@ -15,82 +15,72 @@ torch.set_grad_enabled(False)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-
-def compute_maps_scores(model, prompts, task_relation_words, k_list, n_match):
+def convert_task_words_to_token_ids(model, task_words):
     """
-    Compute the MAPS 0/1 hit array for every (prompt, layer, head), for each
-    k in k_list.
+    Convert a task's descriptive word list into a set of token IDs, trying
+    several casing/spacing variants (leading space, capitalized, all-caps)
+    since a word like "capital" and " capital" can be different tokens.
+    Only strings that tokenize to exactly one token are kept -- this mirrors
+    how the head-output projection can only ever "vote" for single tokens.
 
-    For each prompt, at the final token position:
-      1. Run the model once, caching every layer's attention head outputs
-         (hook_z).
-      2. For each (layer, head), compute that head's individual contribution
-         to the residual stream: z_h @ W_O_h (shape d_model).
-      3. Project through early_decode (final layernorm + unembedding) to get
-         a vocabulary distribution -- "what this head alone would say if
-         read out directly."
-      4. Take the top-k tokens and count how many appear in
-         task_relation_words. Score 1 if the count is >= n_match, else 0.
-
-    Args:
-        model: a HookedTransformer.
-        prompts: list[str], already filtered to prompts the model answers
-            correctly (see check_correctness) -- MAPS scoring is only
-            meaningful on examples the model actually gets right.
-        task_relation_words: list[str], the task's descriptive term set
-            (e.g. from task_relation_dict.json).
-        k_list: list[int], the different top-k values to score under.
-        n_match: int, minimum number of top-k matches required to count a
-            head as a "hit" on a given prompt.
-
-    Returns:
-        dict[int, np.ndarray] mapping each k to an array of shape
-        (n_prompts, n_layers, n_heads) of 0/1 hit scores.
+    Doing this ONCE up front, rather than decoding每 top-k token back to a
+    string at score time, is the main speedup: membership becomes an
+    integer tensor comparison instead of a per-token string operation.
     """
-    n_layers = model.cfg.n_layers
-    n_heads = model.cfg.n_heads
-    max_k = max(k_list)
-    relation_words = {w.lower() for w in task_relation_words}
+    token_ids = set()
+    variants = lambda w: [w, " " + w, w.upper(), w.capitalize(), w.lower()]
 
-    scores = {k: np.zeros((len(prompts), n_layers, n_heads), dtype=np.int8) for k in k_list}
+    for word in task_words:
+        for variant in variants(word):
+            ids = model.tokenizer.encode(variant, add_special_tokens=False)
+            if len(ids) == 1:
+                token_ids.add(ids[0])
 
-    W_O = model.W_O  # (n_layers, n_heads, d_head, d_model)
+    return torch.tensor(sorted(token_ids))
 
-    for prompt_idx, prompt in enumerate(prompts):
-        tokens = model.to_tokens(prompt)
-        # only hook_z is needed -- don't cache every activation
+
+def compute_maps_scores(model, prompts, task_relation_words, k_list, n_match, batch_size=10):
+    """
+    Vectorized MAPS scoring: batches across prompts AND across heads within
+    a layer, and checks top-k matches via integer token-ID comparison
+    instead of decoding each candidate token back to a string.
+
+    Returns: {k: np.ndarray of shape (n_prompts, n_layers, n_heads)}
+    """
+    n_layers, n_heads = model.cfg.n_layers, model.cfg.n_heads
+    n_prompts = len(prompts)
+    candidate_ids = convert_task_words_to_token_ids(model, task_relation_words).to(model.cfg.device)
+
+    scores = {k: np.zeros((n_prompts, n_layers, n_heads), dtype=np.int8) for k in k_list}
+
+    for batch_start in range(0, n_prompts, batch_size):
+        batch_prompts = prompts[batch_start : batch_start + batch_size]
+        tokens = model.to_tokens(batch_prompts, padding_side="left")
+        current_bs = tokens.shape[0]
+
         _, cache = model.run_with_cache(
-            tokens, names_filter=lambda n: n.endswith("hook_z")
+            tokens, names_filter=lambda name: name.endswith("hook_z")
         )
-        last_pos = tokens.shape[-1] - 1
 
-        # (n_layers, n_heads, d_head) at the final position
-        z = torch.stack(
-            [cache["z", layer][0, last_pos] for layer in range(n_layers)], dim=0
-        )
-        # each head's residual-stream contribution: (n_layers, n_heads, d_model)
-        head_out = torch.einsum("lhd,lhdm->lhm", z, W_O)
+        for layer in range(n_layers):
+            z = cache["z", layer][:, -1, :, :]              # (batch, n_heads, d_head)
+            W_O = model.W_O[layer]                            # (n_heads, d_head, d_model)
 
-        # decode all heads in one unembed matmul instead of n_layers*n_heads
-        flat = head_out.reshape(n_layers * n_heads, -1)
-        logits = model.unembed(model.ln_final(flat))     # (n_layers*n_heads, d_vocab)
-        topk_ids = logits.topk(max_k, dim=-1).indices.cpu()  # (n_lh, max_k)
+            # one batched matmul across ALL heads, not a per-head loop
+            head_outputs = torch.einsum("bnd,ndm->bnm", z, W_O)   # (batch, n_heads, d_model)
+            normalized = model.ln_final(head_outputs)               # (batch, n_heads, d_model)
 
-        # decode each distinct token id once, not once per (head, k)
-        id_is_relation = {
-            tid: model.tokenizer.decode([tid]).strip().lower() in relation_words
-            for tid in torch.unique(topk_ids).tolist()
-        }
-        match_mask = torch.tensor(
-            [[id_is_relation[t] for t in row] for row in topk_ids.tolist()]
-        )  # (n_lh, max_k) bool
+            # ONE matmul projects every head to vocab space at once
+            projections = normalized @ model.W_U                     # (batch, n_heads, d_vocab)
 
-        for k in k_list:
-            hit = (match_mask[:, :k].sum(dim=-1) >= n_match)
-            scores[k][prompt_idx] = hit.to(torch.int8).reshape(n_layers, n_heads).numpy()
+            for k in k_list:
+                topk_ids = projections.topk(k, dim=-1).indices        # (batch, n_heads, k)
+                # integer comparison against candidate_ids, no decoding
+                matches = (topk_ids.unsqueeze(-1) == candidate_ids.view(1, 1, 1, -1))  # (batch, n_heads, k, n_candidates)
+                n_hits = matches.any(dim=-1).sum(dim=-1)                # (batch, n_heads)
+                scores[k][batch_start:batch_start + current_bs, layer, :] = (n_hits >= n_match).cpu().numpy()
 
-        if (prompt_idx + 1) % 10 == 0:
-            print(f"  scored {prompt_idx + 1}/{len(prompts)} prompts")
+        print(f"  scored batch {batch_start}-{batch_start + current_bs}/{n_prompts}")
 
     return scores
 
@@ -110,7 +100,7 @@ if __name__ == "__main__":
         help="JSON file mapping each task name to its list of descriptive words")
     parser.add_argument("--save_root", type=str,
         default=os.path.join(SCRIPT_DIR, "output"))
-    parser.add_argument("--k_list", type=list, nargs="+", default=[10])
+    parser.add_argument("--k_list", type=int, nargs="+", default=[20, 25])
     parser.add_argument("--n_match", type=int, default=1)
     parser.add_argument("--exp_size", type=int, default=100,
         help="max number of correct examples to score")
