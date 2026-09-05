@@ -152,5 +152,5 @@ if __name__ == "__main__":
     print(f"saved MAPS scores to {os.path.abspath(save_path)}")
     for k in args.k_list:
         fraction = scores[k].mean(axis=0)  # (n_layers, n_heads)
-        top_heads = np.argwhere(fraction >= 0.1)
-        print(f"k={k}: {len(top_heads)} heads at fraction >= 0.1")
+        top_heads = np.argwhere(fraction >= 0.2)
+        print(f"k={k}: {len(top_heads)} heads at fraction >= 0.2")

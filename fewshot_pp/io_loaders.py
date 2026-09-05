@@ -6,13 +6,8 @@ import numpy as np
 
 def load_receiver_list(save_root, model_name, d_name, prompt_type, prompt_index, k,
                         component_type="Relation", threshold=0.1):
-    """
-    Load EP-only lexical-task heads for d_name from identify_heads_tl.py's
-    pickled MAPS scores, average over the prompt axis, threshold, return
-    as a flat list[(layer, head)].
-    """
     folder = os.path.join(
-        save_root, model_name, d_name, "Heads", "MAPS", f"{component_type}_across_tasks_vary_k"
+        save_root, model_name, d_name, "Heads", "MAPS", f"{component_type}_across_tasks"  # dropped _vary_k
     )
     fname = f"{d_name}_MAPS_{component_type}_heads_across_tasks_{prompt_type}_{prompt_index}_correct.pkl"
     path = os.path.join(folder, fname)
@@ -57,3 +52,11 @@ def load_correct_indices(behavior_json_path, d_name, n_shot):
         )
 
     return result_dict[d_name][key]["correct_index"]
+
+if __name__ == "__main__":
+    receivers = load_receiver_list(
+        save_root="fewshot_pp/output", model_name="Llama-3.2-1B-Instruct",
+        d_name="country-capital", prompt_type="EP", prompt_index=10, k=20, threshold=0.2,
+    )
+    print(receivers)
+    

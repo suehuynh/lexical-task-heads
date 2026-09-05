@@ -62,6 +62,8 @@ if __name__ == "__main__":
     lexical-task heads for a given task (the receiver set).
     """
     parser = argparse.ArgumentParser()
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    parser.add_argument("--save_root", type=str, default=os.path.join(SCRIPT_DIR, "output"))
     parser.add_argument("--model_name", type=str, required=True,
         help="model name, e.g. meta-llama/Llama-3.1-8B-Instruct")
     parser.add_argument("--d_name", type=str, default="country-capital")
@@ -73,6 +75,10 @@ if __name__ == "__main__":
         help="which k (20 or 25) to take the lexical-task head MAPS scores from")
     parser.add_argument("--threshold", type=float, default=0.1,
         help="min fraction of prompts a head must fire on (in load_receiver_list) to count as a receiver")
+    parser.add_argument("--pp_prompt_type", type=str, default="EP", choices=["EP"],
+        help="prompt style used for the path-patching runs")
+    parser.add_argument("--pp_prompt_index", type=int, default=10,
+        help="EP n_shot count for the path-patching prompts (default matches --ep_index)")
     parser.add_argument("--receiver_input", type=str, default="v", choices=["q", "k", "v"],
         help="which input stream of the receiver heads to path-patch into")
     parser.add_argument("--exp_size", type=int, default=50,
@@ -81,7 +87,7 @@ if __name__ == "__main__":
     parser.add_argument("--include_mlp_receivers", action="store_true",
         help="also add (layer, -1) MLP receivers for each layer that has a shared head")
     parser.add_argument("--dataset", type=str, default="datasets/abstractive")
-    parser.add_argument("--save_root", type=str, default="output/")
+    # parser.add_argument("--save_root", type=str, default="output/")
     parser.add_argument("--component_type", type=str, default="Relation")
     parser.add_argument("--behavior_json_path", type=str, default=None,
         help="path to EP_vary_n_shot_behavior.json from behavior_variance_tl.py "
@@ -101,6 +107,7 @@ if __name__ == "__main__":
         prompt_type=args.pp_prompt_type, prompt_index=args.pp_prompt_index, k=args.k,
         component_type=args.component_type, threshold=args.threshold,
     )
+
     if not receiver_list:
         raise ValueError(
             f"No lexical-task heads found for {args.d_name} at k={args.k}, threshold={args.threshold}. "
@@ -117,18 +124,27 @@ if __name__ == "__main__":
     # Load model
     model = HookedTransformer.from_pretrained(args.model_name)
 
-    # Load which examples the model answers correctly at this n_shot (from behavior_variance_tl.py),
-    # and build EP clean/corrupt/answer prompts restricted to those examples.
+    assert args.d_name == args.original_d_name, (
+        f"d_name ({args.d_name}) and original_d_name ({args.original_d_name}) must match -- "
+        f"correct_index is loaded for d_name but applied to original_d_name's prompts."
+    )
+
     correct_index = load_correct_indices(behavior_json_path, args.d_name, args.pp_prompt_index)[:args.exp_size]
     print(f"using {len(correct_index)} model-correct examples")
-    data = _load_dataset(args.original_d_name, args.dataset_folder)
-    clean_prompts, clean_answers = create_few_shot_prompts(data, n_shot=args.n_shot)
+
+    data = _load_dataset(args.original_d_name, args.dataset)
+    clean_prompts, clean_answers = create_few_shot_prompts(data, n_shot=args.pp_prompt_index)
     corrupt_prompts, corrupt_answers = create_corrupt_prompts(
-            n_shot=args.n_shot,
+            n_shot=args.pp_prompt_index,
             original_d_name=args.original_d_name,
             corrupt_d_name=args.corrupt_d_name,
-            dataset_folder=args.dataset_folder,
+            dataset_folder=args.dataset,
         )
+
+    # Filter to only the examples the model actually answers correctly --
+    # correct_index was loaded above but never applied before this fix.
+    clean_prompts = [clean_prompts[i] for i in correct_index]
+    corrupt_prompts = [corrupt_prompts[i] for i in correct_index]
     # Tokenize clean/corrupt together so both batches share one padded length --
     # get_path_patch_head_to_heads indexes new_cache/orig_cache positionally and
     # needs matching tensor shapes.
