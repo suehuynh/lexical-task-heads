@@ -55,7 +55,7 @@ if __name__ == "__main__":
 
     result_dict[args.d_name] = {}
     for n_shot in args.n_shot_list:
-        prompts, answers, _ = create_few_shot_prompts(
+        prompts, answers = create_few_shot_prompts(
             dataset, n_shot=n_shot, delimiter=";", q_bos=" ", a_bos=" ", qa_delimiter=":"
         )
 
