@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=32G
+#SBATCH --mem=64G
 #SBATCH --time=01:00:00
 #SBATCH -o logs/%x_%j.out
 #SBATCH -e logs/%x_%j.err
@@ -22,7 +22,7 @@ cd "$REPO_ROOT/fewshot_pp"
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 TASK="${TASK:-country-capital}"
 N_SHOT="${N_SHOT:-10}"
-EXP_SIZE="${EXP_SIZE:-50}"
+EXP_SIZE="${EXP_SIZE:-20}"
 
 echo "=== identify_lth (few-shot PP): model=$MODEL task=$TASK n_shot=$N_SHOT exp_size=$EXP_SIZE ==="
 python identify_lth.py \
