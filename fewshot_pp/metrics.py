@@ -34,6 +34,22 @@ def topk_match_count(logits, task_relation_words, tokenizer, k=10):
     return len(topk_strs & set(w.lower() for w in task_relation_words))
 
 
+def task_vocab_prob_mass(head_output, model, task_token_ids):
+    """
+    Sum of softmax-probability mass on task_token_ids, read from the logit
+    lens of one head's output.
+
+    head_output: tensor, shape [..., d_model] -- one head's contribution
+        (z_h @ W_O_h) at one sequence position.
+    task_token_ids: 1D LongTensor of vocab ids for the task-descriptive words
+        (V_task), e.g. from convert_task_words_to_token_ids.
+
+    Returns: tensor, shape [...] -- P(V_task) per leading index.
+    """
+    probs = early_decode(head_output, model).softmax(dim=-1)
+    return probs[..., task_token_ids].sum(dim=-1)
+
+
 def n_match_effect(clean_head_output, patched_head_output, model, task_relation_words, tokenizer, k=10):
     """
     Signed change in n (top-k task-term match count) between the clean and

@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import argparse
+import numpy
 import torch
 from transformer_lens import ActivationCache, HookedTransformer, utilities
 from transformer_lens.components import MLP, Embed, LayerNorm, Unembed
@@ -9,8 +10,13 @@ from transformer_lens.hook_points import HookPoint
 
 from prompt_builders import create_few_shot_prompts, create_corrupt_prompts, _load_dataset
 from metrics import *
-from path_patching_tl import get_model_specs_tl, find_earliest_receiver, _resolve_pos, patch_head_input,patch_or_freeze_head_vectors, get_path_patch_head_to_heads
+from path_patching_tl import (
+    get_model_specs_tl, find_earliest_receiver, _resolve_pos, patch_head_input,
+    patch_or_freeze_head_vectors, get_path_patch_head_to_heads,
+    get_path_patch_head_to_LTH_vocab,
+)
 from io_loaders import load_receiver_list, load_correct_indices
+from identify_lth import convert_task_words_to_token_ids
 from plot import plot_sender_head_effect
 
 torch.set_grad_enabled(False)
@@ -79,14 +85,25 @@ if __name__ == "__main__":
         help="prompt style used for the path-patching runs")
     parser.add_argument("--pp_prompt_index", type=int, default=10,
         help="EP n_shot count for the path-patching prompts (default matches --ep_index)")
-    parser.add_argument("--receiver_input", type=str, default="v", choices=["q", "k", "v"],
-        help="which input stream of the receiver heads to path-patch into")
+    parser.add_argument("--receiver_input", type=str, nargs="+", default=["q"],
+        choices=["q", "k", "v"],
+        help="which input stream(s) of the receiver heads to path-patch into. "
+             "Normally pass a single value per run (q, k, or v); the list form is "
+             "for ad-hoc convenience and multiplies the sweep cost.")
+    parser.add_argument("--metric", type=str, nargs="+", default=["l2_norm", "lprr"],
+        choices=["l2_norm", "lprr"],
+        help="scoring metric(s); each produces its own heatmap/tensor/ranking. "
+             "l2_norm = relative delta L2 norm of the receiver q/k/v vector (noising). "
+             "lprr = Lexical Probability Recovery Rate on the LTH vocab projection (denoising).")
+    parser.add_argument("--task_relation_dict_path", type=str,
+        default=os.path.join(SCRIPT_DIR, "datasets", "dataset_info", "task_relation_dict.json"),
+        help="JSON mapping each task to its descriptive words (V_task); used by the lprr metric")
     parser.add_argument("--exp_size", type=int, default=50,
         help="number of model-correct prompts to path-patch over")
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--include_mlp_receivers", action="store_true",
         help="also add (layer, -1) MLP receivers for each layer that has a shared head")
-    parser.add_argument("--dataset", type=str, default="datasets/abstractive")
+    parser.add_argument("--dataset", type=str, default=os.path.join(SCRIPT_DIR, "datasets", "abstractive"))
     # parser.add_argument("--save_root", type=str, default="output/")
     parser.add_argument("--component_type", type=str, default="Relation")
     parser.add_argument("--behavior_json_path", type=str, default=None,
@@ -94,6 +111,18 @@ if __name__ == "__main__":
              "(default: <save_root>/<model_name>/across_tasks/Behavior/EP_vary_n_shot_behavior.json)")
 
     args = parser.parse_args()
+
+    # Resolve relative paths against this script's directory, not the current
+    # working directory, so the script works regardless of where it's launched
+    # from (repo root, fewshot_pp/, a SLURM job, ...). The canonical data tree is
+    # fewshot_pp/output next to this file.
+    def _rooted(p):
+        return p if (p is None or os.path.isabs(p)) else os.path.join(SCRIPT_DIR, p)
+    args.save_root = _rooted(args.save_root)
+    args.dataset = _rooted(args.dataset)
+    args.task_relation_dict_path = _rooted(args.task_relation_dict_path)
+    args.behavior_json_path = _rooted(args.behavior_json_path)
+
     model_name_short = args.model_name.split("/")[-1]
     behavior_json_path = args.behavior_json_path or os.path.join(
         args.save_root, model_name_short, "across_tasks", "Behavior", "EP_vary_n_shot_behavior.json")
@@ -153,44 +182,86 @@ if __name__ == "__main__":
     clean_dataset = TokDataset(all_toks[:n_clean])
     corrupt_dataset = TokDataset(all_toks[n_clean:])
 
-    results = get_path_patch_head_to_heads(
-        receiver_heads=receiver_list,
-        receiver_input=args.receiver_input,
-        model=model,
-        patching_metric=l2_norm_effect,
-        new_dataset=corrupt_dataset,
-        orig_dataset=clean_dataset,
-    )  # [layer, head]
+    # z-caches (all hook_z) are identical across every (receiver_input, metric)
+    # combination, so compute them once and reuse.
+    z_filter = lambda name: name.endswith("z")
+    _, clean_z_cache = model.run_with_cache(clean_dataset.toks, names_filter=z_filter, return_type=None)
+    _, corrupt_z_cache = model.run_with_cache(corrupt_dataset.toks, names_filter=z_filter, return_type=None)
+
+    task_token_ids = None
+    if "lprr" in args.metric:
+        with open(args.task_relation_dict_path) as f:
+            task_relation_dict = json.load(f)
+        if args.d_name not in task_relation_dict:
+            raise KeyError(f"{args.d_name!r} not in {args.task_relation_dict_path}")
+        task_token_ids = convert_task_words_to_token_ids(
+            model, task_relation_dict[args.d_name]
+        ).to(model.cfg.device)
+        print(f"V_task ({len(task_token_ids)} token ids): {task_relation_dict[args.d_name]}")
 
     n_heads = get_model_specs_tl(model)["n_heads"]
     save_dir = os.path.join(args.save_root, model_name_short, args.d_name, "Heads", "causal_mediation", "path_patching")
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    os.makedirs(save_dir, exist_ok=True)
     tag = f"{args.pp_prompt_type}{args.pp_prompt_index}_k{args.k}"
 
-    torch.save(results, os.path.join(save_dir, f"sender_to_shared_lexical_heads_{tag}.pt"))
+    for receiver_input in args.receiver_input:
+        for metric in args.metric:
+            print(f"\n=== path patching: sender -> LTH.{receiver_input}  |  metric={metric} ===")
+            if metric == "l2_norm":
+                results = get_path_patch_head_to_heads(
+                    receiver_heads=receiver_list,
+                    receiver_input=receiver_input,
+                    model=model,
+                    patching_metric=l2_norm_effect,
+                    new_dataset=corrupt_dataset,
+                    orig_dataset=clean_dataset,
+                    new_cache=corrupt_z_cache,
+                    orig_cache=clean_z_cache,
+                )  # [layer, head]
+            else:  # lprr
+                results = get_path_patch_head_to_LTH_vocab(
+                    receiver_heads=receiver_list,
+                    receiver_input=receiver_input,
+                    model=model,
+                    task_token_ids=task_token_ids,
+                    clean_dataset=clean_dataset,
+                    corrupt_dataset=corrupt_dataset,
+                    clean_z_cache=clean_z_cache,
+                    corrupt_z_cache=corrupt_z_cache,
+                )  # [layer, head]
 
-    plot_path = os.path.join(save_dir, f"sender_to_shared_lexical_heads_{tag}_heatmap.html")
-    plot_sender_head_effect(results, receiver_list, args.receiver_input, save_path=plot_path)
+            stem = f"sender_to_shared_lexical_heads_{tag}_{receiver_input}_{metric}"
+            torch.save(results, os.path.join(save_dir, f"{stem}.pt"))
 
-    heads_ranked = rank_heads(results.cpu().numpy(), threshold=None)
-    heads_ranked = [(int(layer), int(head), float(score)) for layer, head, score in heads_ranked]
+            plot_path = os.path.join(save_dir, f"{stem}_heatmap.html")
+            plot_sender_head_effect(
+                results, receiver_list, receiver_input, save_path=plot_path, metric=metric
+            )
 
-    ranked = {
-        "meta": {
-            "model_name": model_name_short, "d_name": args.d_name, "k": args.k,
-            "threshold": args.threshold,
-            "pp_prompt_type": args.pp_prompt_type, "pp_prompt_index": args.pp_prompt_index,
-            "receiver_input": args.receiver_input, "n_examples": len(clean_prompts),
-            "receiver_list": receiver_list,
-        },
-        "heads_ranked": heads_ranked,
-    }
-    print(f"\nTop 15 upstream heads (sender -> receiver_input={args.receiver_input}):")
-    for layer, head, score in heads_ranked[:15]:
-        print(f"  L{layer}H{head}: {score:.4f}")
+            heads_ranked = rank_heads(results.cpu().numpy(), threshold=None)
+            heads_ranked = [
+                (int(layer), int(head), float(score))
+                for layer, head, score in heads_ranked
+                if not numpy.isnan(score)
+            ]
 
-    ranked_path = os.path.join(save_dir, f"sender_to_shared_lexical_heads_{tag}_ranked.json")
-    with open(ranked_path, "w") as f:
-        json.dump(ranked, f, indent=2)
+            ranked = {
+                "meta": {
+                    "model_name": model_name_short, "d_name": args.d_name, "k": args.k,
+                    "threshold": args.threshold,
+                    "pp_prompt_type": args.pp_prompt_type, "pp_prompt_index": args.pp_prompt_index,
+                    "receiver_input": receiver_input, "metric": metric,
+                    "n_examples": len(clean_prompts),
+                    "receiver_list": receiver_list,
+                },
+                "heads_ranked": heads_ranked,
+            }
+            print(f"Top 15 upstream heads (sender -> {receiver_input}, {metric}):")
+            for layer, head, score in heads_ranked[:15]:
+                print(f"  L{layer}H{head}: {score:.4f}")
+
+            ranked_path = os.path.join(save_dir, f"{stem}_ranked.json")
+            with open(ranked_path, "w") as f:
+                json.dump(ranked, f, indent=2)
+
     print("\nsaved to", save_dir)
