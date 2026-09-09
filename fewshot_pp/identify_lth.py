@@ -104,6 +104,8 @@ if __name__ == "__main__":
     parser.add_argument("--n_match", type=int, default=1)
     parser.add_argument("--exp_size", type=int, default=None,
         help="max number of correct examples to score (default: all model-correct examples)")
+    parser.add_argument("--batch_size", type=int, default=10,
+        help="forward-pass batch size for correctness check and MAPS scoring")
 
     args = parser.parse_args()
     model_name_short = args.model_name.split("/")[-1]
@@ -127,7 +129,7 @@ if __name__ == "__main__":
         dataset, n_shot=args.n_shot, delimiter=";", q_bos=" ", a_bos=" ", qa_delimiter=":"
     )
 
-    correctness = check_correctness(model=model, prompts=prompts, answers=answers, batch_size=10)
+    correctness = check_correctness(model=model, prompts=prompts, answers=answers, batch_size=args.batch_size)
     correct_index = correctness["correct_index"]
     if args.exp_size is not None:
         correct_index = correct_index[: args.exp_size]
@@ -136,7 +138,7 @@ if __name__ == "__main__":
 
     scores = compute_maps_scores(
         model, correct_prompts, task_relation_words,
-        k_list=args.k_list, n_match=args.n_match,
+        k_list=args.k_list, n_match=args.n_match, batch_size=args.batch_size,
     )
 
     save_dir = os.path.join(
