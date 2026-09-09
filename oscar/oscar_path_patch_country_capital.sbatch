@@ -22,7 +22,7 @@ MODEL="meta-llama/Llama-3.2-1B-Instruct"
 MODEL_SHORT="${MODEL##*/}"
 
 # args:  $1 = receiver input (q|k|v, default v)   $2 = exp_size (default 189 = full)
-RECV="${1:-v}"
+RECV="${1:-q}"
 EXP="${2:-189}"
 
 MAPS_PKL="output/${MODEL_SHORT}/country-capital/Heads/MAPS/Relation_across_tasks/country-capital_MAPS_Relation_heads_across_tasks_EP_10_correct.pkl"
