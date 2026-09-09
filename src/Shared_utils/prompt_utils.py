@@ -255,6 +255,79 @@ def create_zs_prompts(dataset, return_answers=False):
 def create_minimal_corrupt_prompts(dataset):
     return [":"] * len(dataset)
 
+def create_corrupt_prompts_task_shuffle(
+    dataset, d_name, n_shot, delimiter, q_bos, a_bos, qa_delimiter,
+    corrupt_d_names=None,
+):
+    """
+    Task-corrupted prompts built the way create_random_query_prompts builds
+    positional windows -- deterministic index slicing, not random.sample --
+    but the window is drawn from a DIFFERENT task's JSON file each time,
+    cycling through every other file in dataset_folder. The final query
+    input/answer stay d_name's real values, so only the demonstrated task
+    identity changes.
+
+    Args:
+        dataset: path to a directory of per-task JSON files
+            (e.g. "datasets/abstractive/"), each a list of
+            {"input","output"} dicts.
+        d_name: filename stem (no .json) of the target task -- supplies
+            queries and the "true" (original-task) answers.
+        n_shot: number of demonstration pairs per prompt.
+        corrupt_d_names: optional list of filename stems to draw
+            corrupting demonstrations from. If None, uses every other
+            .json file found in dataset_folder.
+
+    Returns:
+        corrupt_prompts: list[str]
+        corrupt_answers: list[str] -- d_name's true answer per query, kept
+            for bookkeeping / correctness filtering, not a prediction of
+            what the corrupted-context model will actually say.
+        corrupt_sources: list[str] -- which task file supplied the demos
+            for each prompt, so you can later check whether the effect is
+            source-task-specific or general.
+    """
+    with open(os.path.join(dataset, f"{d_name}.json")) as f:
+        query_data = json.load(f)
+
+    if corrupt_d_names is None:
+        corrupt_d_names = sorted(
+            fn[:-5] for fn in os.listdir(dataset)
+            if fn.endswith(".json") and fn[:-5] != d_name
+        )
+        if not corrupt_d_names:
+            raise ValueError(f"No other task files in {dataset} to corrupt from.")
+
+    corrupt_datasets = {}
+    for name in corrupt_d_names:
+        with open(os.path.join(dataset, f"{name}.json")) as f:
+            corrupt_datasets[name] = json.load(f)
+
+    corrupt_prompts = []
+    corrupt_answers = []
+    corrupt_sources = []
+
+    for i in range(len(query_data)):
+        corrupt_name = corrupt_d_names[i % len(corrupt_d_names)]
+        c_data = corrupt_datasets[corrupt_name]
+
+        context = ""
+        for j in range(i - n_shot, i):
+            example = c_data[j % len(c_data)]
+            context += (
+                f"{q_bos}{example['input']}{qa_delimiter}"
+                f"{a_bos}{example['output']}{delimiter}"
+            )
+
+        original_query_input = query_data[i]["input"]
+        context += f"{q_bos}{original_query_input}{qa_delimiter}"
+
+        corrupt_prompts.append(context)
+        corrupt_answers.append(a_bos + query_data[i]["output"])
+        corrupt_sources.append(corrupt_name)
+
+    return corrupt_prompts, corrupt_answers, corrupt_sources
+
 def split_and_extract(input_string, delimiter=';'):
     """
     Splits a string by a given delimiter and returns the last part.
@@ -320,7 +393,9 @@ def generate_few_shot_prompts(d_name=None, model=None,
             dataset, n_shot = 5, delimiter = ";", q_bos=" ", a_bos=" ", qa_delimiter=":")
     elif corruption_type == "minimal":
         corrupt_few_shot_prompts = create_minimal_corrupt_prompts(dataset)
-    
+    elif corruption_type == "task":
+        corrupt_few_shot_prompts, _, = create_corrupt_prompts_task_shuffle(
+                    dataset, n_shot = 5, delimiter = ";", q_bos=" ", a_bos=" ", qa_delimiter=":")
 
     if filter_correct:
         # Filter out the prompts that are not correct #TODO: confirm the code 
@@ -966,7 +1041,7 @@ def get_prompt_token(
     return_answer_tokens:bool=False,
     corrupt_type:str=None,
     inst_random_relation_dict:dict=None,
-    dataset_folder:str="../datasets/abstractive",
+    dataset_folder:str="datasets/abstractive",
 ): 
     """
     Args:

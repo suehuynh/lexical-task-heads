@@ -24,7 +24,7 @@ if __name__ == "__main__":
     parser.add_argument("--prompt_type", type=str, required=True, help="prompt type: EP or IP")
     parser.add_argument("--batch_size", type=int, default=20, help="batch size")
     parser.add_argument("--remote", type=bool, default=False, help="whether to use NDIF to run model remotely")
-    parser.add_argument("--dataset_folder", type=str, default="../datasets/abstractive", help="folder of the dataset")
+    parser.add_argument("--dataset_folder", type=str, default="datasets/abstractive", help="folder of the dataset")
 
     args = parser.parse_args()
     model_name = args.model_name
@@ -72,7 +72,11 @@ if __name__ == "__main__":
         result_dict = {}
     
     # Load instruction_dict
-    with open(os.path.join(project_root, "datasets", "dataset_info", 
+    # with open(os.path.join(project_root, "datasets/", "dataset_info/", 
+    #     f"instruction_dict.json"), "r"
+    # ) as f:
+    #     instruction_dict = json.load(f)
+    with open(os.path.join("datasets/", "dataset_info/", 
         f"instruction_dict.json"), "r"
     ) as f:
         instruction_dict = json.load(f)

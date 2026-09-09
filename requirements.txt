@@ -1,3 +1,5 @@
 transformer_lens
 nnsight
 transformers
+plotly_utils
+torch

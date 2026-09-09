@@ -4,12 +4,12 @@ import json
 import numpy as np
 from typing import List
 from transformer_lens import HookedTransformer
-from nnsight import LanguageModel
 from Shared_utils.shared_utils import *
 from Shared_utils.prompt_utils import *
 from Submodules.identify_heads_early_decode import *
 from Shared_utils.wrapper import get_accessor_config, get_model_specs, ModelAccessor
 
+device = device = "cuda" if torch.cuda.is_available() else "cpu"
 def get_heads_per_prompt(
     target_task:str=None, prompt_type:str=None, prompt_template_index:int=None,
     n_match:int=None, component_type:str="Relation",
@@ -165,11 +165,11 @@ def calc_MAPS_score(
         return binary_scores_per_batch_item
     else:
         raise ValueError(f"Invalid result_type: {result_type}")
-
+    
 def calc_MAPS_score_from_activations(model,
     cache, k, dst_tokens, current_batch_size, 
     result_type="mean_of_batch", relation=True,
-    device="cuda", apply_ln=False, n_match=1,
+    device=device, apply_ln=False, n_match=1,
 ):
     """
     Args 
