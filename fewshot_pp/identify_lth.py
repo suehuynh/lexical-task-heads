@@ -102,8 +102,8 @@ if __name__ == "__main__":
         default=os.path.join(SCRIPT_DIR, "output"))
     parser.add_argument("--k_list", type=int, nargs="+", default=[20, 25])
     parser.add_argument("--n_match", type=int, default=1)
-    parser.add_argument("--exp_size", type=int, default=100,
-        help="max number of correct examples to score")
+    parser.add_argument("--exp_size", type=int, default=None,
+        help="max number of correct examples to score (default: all model-correct examples)")
 
     args = parser.parse_args()
     model_name_short = args.model_name.split("/")[-1]
@@ -128,7 +128,9 @@ if __name__ == "__main__":
     )
 
     correctness = check_correctness(model=model, prompts=prompts, answers=answers, batch_size=10)
-    correct_index = correctness["correct_index"][: args.exp_size]
+    correct_index = correctness["correct_index"]
+    if args.exp_size is not None:
+        correct_index = correct_index[: args.exp_size]
     correct_prompts = [prompts[i] for i in correct_index]
     print(f"scoring {len(correct_prompts)} model-correct examples (of {len(prompts)})")
 
