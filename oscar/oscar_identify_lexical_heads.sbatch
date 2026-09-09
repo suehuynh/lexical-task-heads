@@ -34,5 +34,8 @@ TASK="${TASKS[$SLURM_ARRAY_TASK_ID]}"
 echo "=== Task: $TASK (array index $SLURM_ARRAY_TASK_ID of ${#TASKS[@]}) ==="
 
 echo "=== $TASK: identify lexical-task heads (TransformerLens) ==="
-python identify_lth.py --model_name "$MODEL" --d_name "$TASK" \
-    --n_shot 10 --exp_size 100 --k_list 20 25 --batch_size 10
+# python identify_lth.py --model_name "$MODEL" --d_name "$TASK" \
+#     --n_shot 10 --exp_size 100 --k_list 20 25 --batch_size 10
+
+python identify_lth.py --model_name meta-llama/Llama-3.2-1B-Instruct --d_name country-capital \
+    --n_shot 10 --k_list 20 --exp_size 100 --batch_size 16
